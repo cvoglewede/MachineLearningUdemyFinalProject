@@ -1,0 +1,258 @@
+---
+title: "Tree Methods Project"
+author: "Connor Voglewede"
+date: "6/14/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE, message=FALSE,results='hide'}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Get the Data
+
+Call the ISLR library and check the head of College (a built-in data frame with ISLR, use data() to check this.) Then reassign College to a dataframe called df
+
+```{r, message=FALSE,results='hide'}
+library(ISLR)
+library(tidyverse)
+library(caTools)
+library(rpart)
+library(rpart.plot)
+```
+
+```{r}
+head(College)
+```
+
+```{r}
+df <- College
+```
+
+## EDA
+
+Create a scatterplot of Grad.Rate versus Room.Board, colored by the Private column.
+
+```{r}
+df %>% 
+  ggplot(aes(x=Grad.Rate,y=Room.Board,color=Private))+geom_point()
+```
+
+Create a histogram of full time undergrad students, color by Private.
+
+```{r}
+df %>% 
+  ggplot(aes(x=F.Undergrad,fill=Private))+geom_histogram(bins = 50,color="black",position=position_stack(reverse=TRUE))
+
+```
+
+Create a histogram of Grad.Rate colored by Private. You should see something odd here.
+
+```{r}
+df %>% 
+  ggplot(aes(x=Grad.Rate,fill=Private))+geom_histogram(bins = 50,color="black",position=position_stack(reverse=TRUE))
+
+```
+
+What college had a Graduation Rate of above 100%? Answer: Cazenovia College
+
+```{r}
+row.names(df[df$Grad.Rate>100,])
+```
+
+Change that college's grad rate to 100%
+
+```{r}
+df["Cazenovia College","Grad.Rate"] <- 100
+```
+
+
+## Train Test Split
+Split your data into training and testing sets 70/30. Use the caTools library to do this.
+
+```{r}
+seed <- 103
+set.seed(seed)
+sample <- sample.split(df$Private, SplitRatio = 0.70)
+train = subset(df, sample == TRUE)
+test = subset(df, sample == FALSE)
+```
+
+
+## Decision Tree
+Use the rpart library to build a decision tree to predict whether or not a school is Private. Remember to only build your tree off the training data.
+
+```{r}
+tree_model <- rpart(Private ~ . , method='class', data= train)
+prp(tree_model,main="Tree Model")
+```
+
+Use predict() to predict the Private label on the test data.
+
+```{r}
+label <- "Private"
+predicted_values <- predict(tree_model, test[,-which(colnames(test)==label)])
+```
+
+Check the Head of the predicted values. You should notice that you actually have two columns with the probabilities.
+
+```{r}
+head(predicted_values)
+
+```
+
+Turn these two columns into one column to match the original Yes/No Label for a Private column.
+
+```{r}
+test$pred_tree <- predict(tree_model, test[,-which(colnames(test)==label)])[,"Yes"]
+classification_point <- 0.5
+test$predclass_tree <- ifelse(test$pred_tree>classification_point,'Yes','No')
+```
+
+
+Now use table() to create a confusion matrix of your tree model.
+
+```{r}
+table(test$Private,test$predclass_tree)
+
+```
+
+Use the rpart.plot library and the prp() function to plot out your tree model.
+
+```{r}
+prp(tree_model)
+```
+
+
+## Random Forest
+
+Now let's build out a random forest model!
+
+Call the randomForest package library
+
+```{r, message=FALSE,results='hide'}
+library(randomForest)
+
+```
+
+
+Now use randomForest() to build out a model to predict Private class. Add importance=TRUE as a parameter in the model. (Use help(randomForest) to find out what this does.
+
+```{r}
+set.seed(seed)
+rf_base_model <- randomForest(Private ~ ., data=train, importance= TRUE)
+```
+
+What was your model's confusion matrix on its own training set? Use model$confusion.
+
+```{r}
+rf_base_model$confusion
+
+```
+
+Grab the feature importance with model$importance. Refer to the reading for more info on what Gini[1] means.[2]
+
+
+```{r}
+rf_base_model$importance
+varImpPlot(rf_base_model,type=1,main="Variable Importance Plot, Random Forest")
+
+
+```
+
+
+Predictions:
+Now use your random forest model to predict on your test set!
+
+```{r}
+test$pred_class_RF <- predict(rf_base_model,newdata = test[,-which(colnames(test)==label)])
+
+table(test$Private,test$pred_class_RF)
+```
+
+## Testing Out Caret
+
+I wanted to further stretch myself on this project, so I studied up on the caret package, which I found very positive feedback on. The ability to centralize data pre-processing, model selection, and tuning into a single package is very appealing, as is the standardized language to apply predictions to the holdout dataset.
+
+I'm first going to call the caret package:
+
+```{r, message=FALSE,results='hide'}
+library(caret)
+
+```
+
+There is no pre-processing to be done on this dataset, so I will skip straight to setting up train control settings. These setting specify the settings for resampling and cross validation. To name just a few, methods that can be called here are 'boot' for boostrap resampling, 'cv' for cross-validation, 'repeatedcv' for repeated cross validation, and 'none' to fit one model to the entire training dataset. For repeated cross validation, I've chosen 10 folds with 3 repeats.
+
+```{r}
+set.seed(seed)
+fitControl <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3)
+```
+
+Next, I can specify the parameters I want to grid search along, as well as the specific values to search. 'm' is the only parameter in the random forest model, so I will search along m between 2 and 15
+
+```{r}
+grid <- expand.grid(.mtry=c(seq(2:15)))
+```
+
+Now I can train the RandomForest model in caret, optimizing for accuracy:
+
+```{r}
+rf_caret_model <- train(
+  Private~.
+  ,method = "rf"
+  ,data=train          
+  ,trControl=fitControl
+  ,tuneGrid = grid
+  , metric="Accuracy")
+print(rf_caret_model)
+
+```
+
+We can see that the best model utilizes m=4 by calling model$bestTune.
+
+The plots below shows training accuracy as a function of m, to give an indication of the best model found through the grid search.
+
+```{r}
+rf_caret_model$bestTune
+plot(rf_caret_model,main="RF Model Tuning", ylab="Accuracy",xlab="parameter m, number of randomly selected predictors")
+```
+
+Comparing this variable importance plot to the random forest model generated by the randomForest package, very little has changed. Out of State tuition and number of fulltime undergraduates are far and away the most impactful variables. Cost of books was the least importance variable in both models.
+
+```{r}
+plot(varImp(rf_caret_model),main="Caret-tuned variable importance plot")
+```
+
+
+The confusion matric of the best random forest model tuned through caret can be seen below.
+
+```{r}
+test$pred_class_RF_tuned <- predict(rf_caret_model,test)
+table(test$Private,test$pred_class_RF_tuned)
+```
+
+
+## Model Comparison
+
+With 3 models and 3 accuracies, it's very easy to compare in a single dataframe and identify that the caret-tuned Random Forest Model is the optimal model with accuracy of .923
+
+```{r}
+Models <- c("Tree","RandomForest","TunedRandomForest")
+Model_Accuracies <- c(mean(test$Private==test$predclass_tree),
+                      mean(test$Private==test$pred_class_RF),
+                      mean(test$Private==test$pred_class_RF_tuned))
+Model_comparison <- tibble(Models,Model_Accuracies)
+Model_comparison<- Model_comparison %>% 
+  arrange(desc(Model_Accuracies))
+print(Model_comparison)
+
+```
+
+
+
+
+
+
