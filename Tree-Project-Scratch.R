@@ -58,7 +58,7 @@ library(randomForest)
 rf_caret_model <- randomForest(Private ~ ., data=train, importance= TRUE)
 model$confusion
 
-model$importance
+rf_caret_model$importance
 varImp(model)
 varImpPlot(model,type=1)
 
